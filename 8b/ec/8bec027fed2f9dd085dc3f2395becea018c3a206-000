@@ -1,0 +1,50 @@
+{
+ "date": "8 October 2026",
+ "width": 1080,
+ "height": 1920,
+ "fps": 24,
+ "appear": 1.0,
+ "hold": 2.0,
+ "disappear": 1.0,
+ "lines": [
+  {
+   "text": "鯉陶器",
+   "family": "Yu"
+  },
+  {
+   "text": "Koi Tōki",
+   "family": "Display"
+  },
+  {
+   "text": "Carpe Céramique",
+   "family": "Display"
+  }
+ ],
+ "foreground": "#FFFF00",
+ "background": "transparent",
+ "widthRatio": 0.8,
+ "lineGap": 50,
+ "variants": [
+  {
+   "id": "crossconnections-yellow",
+   "motion": 2,
+   "amplitude": 40,
+   "frequency": 120,
+   "foreground": "#FFFF00"
+  }
+ ],
+ "rowDelay": 0.25,
+ "firstStart": 0.015,
+ "spread": 0.3,
+ "settle": 0.17,
+ "slices": 4,
+ "shadow": {
+  "color": "rgba(0,0,0,0.55)",
+  "blur": 9,
+  "offsetX": 0,
+  "offsetY": 0
+ },
+ "weight": 500,
+ "pingPongCycles": 2,
+ "pingPongAmplitude": 14
+}
