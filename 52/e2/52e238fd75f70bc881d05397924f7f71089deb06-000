@@ -1,0 +1,95 @@
+# 9 October 2026: FINAL from the ghost-free sources (w/*_v2.mp4). B 7.5 s then A 12.5 s.
+# Beat-synced letter-by-letter subtitles (71 BPM, first beat 0.38 s in the music excerpt from 3:36), motion-designer zooms:
+# slow push-in per clip + punch on every second beat + zoom-through at the cut. SFX: Inv Open on subtitle appearance,
+# Mail Open on the "Before" disappearance only (F1 removed). All parameters in CFG. FR : réglages au même endroit.
+import numpy as np, subprocess, sys, os
+sys.path.insert(0,'Scripts'); from Montage import grade, read, enc, W, H, FPS
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+B,A=7.5,12.5; D=B+A; SR=48000
+CFG=dict(
+ gradeB=dict(g=(0.90,0.99,1.10),gam=1.00,con=1.22,sat=1.12,vig=0.50,lift=0.00),
+ gradeA=dict(g=(0.90,0.99,1.10),gam=1.025,con=1.15,sat=1.20,vig=0.70,lift=0.0),
+ beat=dict(bpm=71.0,first=0.38),
+ title=dict(start_frame=9,top=90),                                   # title animation begins on the first beat (0.375 s)
+ sub=dict(font='/Users/zenray/Library/Fonts/Vogun-Medium.ttf',size=84,baseline=1850,stay=2.0,fade_out=1.0,
+          letter_gap_beats=1/8,pop=0.35,pop_scale=0.45,rise=34,shadow=0.55,blur=8),
+ zoom=dict(enabled=False,cx=0.5,cy=0.45,push=dict(B=0.05,A=0.04),punch=0.035,punch_len=0.40,every=2,cut_in=0.10,cut_out=0.12,cut_len=0.40,cut_pre=0.25),
+ sfx=[dict(file='sound-inv-open/DS26_Inv_Open.mp3',onset=0.0285,peak=0.5,when='sub_in'),
+      dict(file='sound-mail-open/DS10_Mail_Open.mp3',onset=0.0464,peak=0.5,when='sub_out',only=0)],
+ music_start=216,fade=0.25,swell=dict(db=4.0,rise=0.25,release=0.5))
+bt=60/CFG['beat']['bpm']; beats=CFG['beat']['first']+bt*np.arange(0,int(D/bt)+2)
+nearest=lambda t: float(beats[np.argmin(abs(beats-t))])
+subs=[('Before',nearest(0.5)),('After',nearest(B+0.5))]; print('subtitle starts (nearest beat):',subs,'beat period %.3f s'%bt)
+eob=lambda u,c1=1.70158:1+(c1+1)*(np.clip(u,0,1)-1)**3+c1*(np.clip(u,0,1)-1)**2
+ease3=lambda u:1-(1-np.clip(u,0,1))**3
+# ---------- subtitle letter sprites
+S=CFG['sub']; font=ImageFont.truetype(S['font'],S['size']); dm=ImageDraw.Draw(Image.new('L',(10,10)))
+def letters(text):
+    tot=dm.textlength(text,font=font); x=(W-tot)/2; out=[]
+    for i,ch in enumerate(text):
+        w=dm.textlength(ch,font=font); adv=dm.textlength(text[:i+1],font=font)-dm.textlength(text[:i],font=font)
+        if ch!=' ':
+            c=Image.new('RGBA',(200,200),(0,0,0,0)); d=ImageDraw.Draw(c); d.text((100-w/2,150),ch,font=font,fill=(255,255,255,255),anchor='ls')
+            a=np.array(c)[...,3]; sh=Image.fromarray((a*S['shadow']).astype(np.uint8)).filter(ImageFilter.GaussianBlur(S['blur'])); sp=Image.new('RGBA',(200,200),(0,0,0,0)); sp.putalpha(sh); sp.alpha_composite(c)
+            out.append((sp,x+adv/2))
+        x+=adv
+    return out
+SPR=[(letters(t),t0) for t,t0 in subs]
+def draw_subs(f,t):
+    im=None
+    for (lets,t0) in SPR:
+        u0=t-t0
+        if u0<0 or u0>S['letter_gap_beats']*bt*len(lets)+S['pop']+S['stay']+S['fade_out']: continue
+        if im is None: im=Image.fromarray(f).convert('RGBA')
+        out_a=1.0
+        tail=u0-(S['letter_gap_beats']*bt*(len(lets)-1)+S['pop']+S['stay']) if False else None
+        fo=u0-(1.0+S['stay'])                                   # fade-out starts 1 s (fade_in) + 2 s after the start, as before
+        out_a=1.0 if fo<0 else max(0.0,1-fo/S['fade_out'])
+        for k,(sp,cx) in enumerate(lets):
+            u=(u0-k*S['letter_gap_beats']*bt)/S['pop']
+            if u<=0: continue
+            e=float(eob(u)); sc=S['pop_scale']+(1-S['pop_scale'])*e; al=min(1,u*1.6)*out_a; yoff=S['rise']*(1-float(ease3(u)))
+            s2=sp.resize((max(1,int(200*sc)),max(1,int(200*sc))),Image.LANCZOS)
+            if al<1: a=np.array(s2); a[...,3]=(a[...,3]*al).astype(np.uint8); s2=Image.fromarray(a)
+            im.alpha_composite(s2,(int(cx-s2.width/2),int(S['baseline']-50*sc+ (1-sc)*0 - s2.height/2+50+yoff)))
+    return f if im is None else np.array(im.convert('RGB'))
+# ---------- zoom (motion-designer punches)
+Z=CFG['zoom']
+def zoom_at(t,clip):
+    if not Z['enabled']: return 1.0
+    t0,T=(0,B) if clip=='B' else (B,A); z=1+Z['push'][clip]*(t-t0)/T
+    for k,tb in enumerate(beats):
+        if k%Z['every']==0 and 0<=t-tb<Z['punch_len'] and abs(tb-B)>0.3 and tb>=CFG['beat']['first']+bt: z+=Z['punch']*(1-float(ease3((t-tb)/Z['punch_len'])))
+    if clip=='B' and B-Z['cut_pre']<=t<B: z+=Z['cut_in']*float(ease3((t-(B-Z['cut_pre']))/Z['cut_pre']))**2
+    if clip=='A' and 0<=t-B<Z['cut_len']: z+=Z['cut_out']*(1-float(ease3((t-B)/Z['cut_len'])))
+    return z
+def zoomed(f,z):
+    if z<=1.0005: return f
+    w,h=W/z,H/z; cx=Z['cx']*W; cy=Z['cy']*H; x0=min(max(cx-w/2,0),W-w); y0=min(max(cy-h/2,0),H-h)
+    return np.array(Image.fromarray(f).resize((W,H),Image.BICUBIC,box=(x0,y0,x0+w,y0+h)))
+# ---------- video
+vb=read('w/B_7.5s_v2.mp4'); va=read('w/A_12.5s_v2.mp4'); assert len(vb)==180 and len(va)==300,(len(vb),len(va))
+tf=[np.array(Image.open(f'title/frames/{i:04d}.png').convert('RGBA')) for i in range(96)]; dy=CFG['title']['top']-626
+def shift_up(t): L=np.zeros_like(t); L[:H+dy]=t[-dy:]; return L
+out=[]
+for i in range(len(vb)+len(va)):
+    t=i/FPS; isB=i<len(vb); clip='B' if isB else 'A'
+    f=grade(vb[i] if isB else va[i-len(vb)],CFG['gradeB'] if isB else CFG['gradeA']); f=zoomed(f,zoom_at(t,clip))
+    k=i-CFG['title']['start_frame']
+    if 0<=k<len(tf): f=np.array(Image.alpha_composite(Image.fromarray(f).convert('RGBA'),Image.fromarray(shift_up(tf[k]))).convert('RGB'))
+    out.append(draw_subs(f,t))
+enc(out,'_video3.mp4')
+# ---------- audio
+raw=subprocess.run(['ffmpeg','-v','error','-ss',str(CFG['music_start']),'-t',str(D),'-i','music/in-spite-of-everything.mp3','-af','loudnorm=I=-16:TP=-1.5','-ar',str(SR),'-ac','2','-f','f32le','-'],capture_output=True,check=True).stdout
+m=np.frombuffer(raw,np.float32).reshape(-1,2).copy(); N=len(m); t=np.arange(N)/SR
+sw=CFG['swell']; g=10**(sw['db']/20); env=np.ones(N); r=(t>=B-sw['rise'])&(t<B); env[r]=1+(g-1)*(t[r]-(B-sw['rise']))/sw['rise']; rel=(t>=B)&(t<B+sw['release']); env[rel]=g-(g-1)*(t[rel]-B)/sw['release']
+m*=(env*eob(t/CFG['fade'])*eob((D-t)/CFG['fade'])*0.85)[:,None]
+sfxtrack=np.zeros_like(m)
+for sf in CFG['sfx']:
+    sx=np.frombuffer(subprocess.run(['ffmpeg','-v','error','-ss',str(sf.get('cut',0)),'-i',sf['file'],'-ac','2','-ar',str(SR),'-f','f32le','-'],capture_output=True,check=True).stdout,np.float32).reshape(-1,2).copy(); sx*=sf['peak']/abs(sx).max()
+    for ci,(_,t0) in enumerate(subs):
+        if sf.get('only',ci)!=ci: continue
+        ts=t0+(0 if sf['when']=='sub_in' else 1.0+S['stay']); s0=int(round((ts-sf['onset'])*SR)); sfxtrack[s0:s0+len(sx)]+=sx; print(os.path.basename(sf['file']),'onset at %.4f s'%ts)
+m=np.clip(m+sfxtrack,-0.99,0.99)
+subprocess.run(['ffmpeg','-v','error','-y','-i','_video3.mp4','-f','f32le','-ar',str(SR),'-ac','2','-i','-','-map','0:v','-map','1:a','-c:v','copy','-c:a','aac','-b:a','192k','-shortest','montage_20s_B7.5_A12.5_v7.mp4'],input=m.astype(np.float32).tobytes(),check=True)
+os.remove('_video3.mp4'); print('done')
