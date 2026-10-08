@@ -1,0 +1,1 @@
+ffmpeg -v error -y -i source.MOV -an -vf  -c:v ffv1 interp/x3_1080.mkv  252.45s user 3.86s system 131% cpu 3:14.94 total

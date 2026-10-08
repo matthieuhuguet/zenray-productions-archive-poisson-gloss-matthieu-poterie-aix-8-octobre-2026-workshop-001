@@ -1,0 +1,14 @@
+# 8 October 2026: render V1 = uniform turn speed, same duration (160 frames @ 23.976), HEVC hvc1 1080x1920
+import numpy as np, json, subprocess
+W,H=1080,1920; plan=json.load(open('retime_plan.json')); idx=plan['interp_idx']
+raw=subprocess.run(['ffmpeg','-v','error','-i','interp/x3_1080.mkv','-f','rawvideo','-pix_fmt','rgb24','-'],capture_output=True,check=True).stdout
+fr=np.frombuffer(raw,np.uint8).reshape(-1,H,W,3); print('interp frames',len(fr))
+out=np.stack([fr[min(i,len(fr)-1)] for i in idx]); np.save('v1_frames.npy',out) if False else None
+p=subprocess.Popen(['ffmpeg','-v','error','-y','-f','rawvideo','-pix_fmt','rgb24','-s',f'{W}x{H}','-r','24000/1001','-i','-','-c:v','libx265','-crf','14','-preset','slow','-tag:v','hvc1','-pix_fmt','yuv420p','-movflags','+faststart','v1_uniform_turn.mp4'],stdin=subprocess.PIPE)
+for f in out: p.stdin.write(f.tobytes())
+p.stdin.close(); p.wait()
+from PIL import Image
+sel=json.load(open('sheet_sel.json')); ims=[Image.fromarray(out[i]).resize((270,480)) for i in sel]
+S=Image.new('RGB',(270*6,480*2),'white')
+for k,im in enumerate(ims): S.paste(im,((k%6)*270,(k//6)*480))
+S.save('sheets/storyboard_uniform_turn.png')

@@ -1,0 +1,23 @@
+# 8 October 2026: measure per-frame horizontal surface shift of the turntable pot (phase correlation, centre window)
+import numpy as np, json, sys
+W,H=270,480
+a=np.fromfile('lowres.gray',dtype=np.uint8).reshape(-1,H,W).astype(np.float32)
+y0,y1,x0,x1=90,250,70,200
+win=np.outer(np.hanning(y1-y0),np.hanning(x1-x0))
+def sub(i): 
+    r=a[i,y0:y1,x0:x1]; return (r-r.mean())*win
+shifts=[0.0]
+for i in range(1,len(a)):
+    A=np.fft.fft2(sub(i-1)); B=np.fft.fft2(sub(i))
+    R=A*np.conj(B); R/=np.abs(R)+1e-6
+    c=np.fft.ifft2(R).real
+    py,px=np.unravel_index(np.argmax(c),c.shape)
+    def para(v,m,p): 
+        d=m-2*v+p; return 0 if d==0 else 0.5*(m-p)/d
+    n=c.shape[1]
+    sx=px+para(c[py,px],c[py,(px-1)%n],c[py,(px+1)%n])
+    if sx>n/2: sx-=n
+    shifts.append(-sx)  # sign: positive = content moves right
+s=np.array(shifts)
+json.dump(s.tolist(),open('shifts.json','w'))
+print('n',len(s)); print(np.round(s,1).tolist())

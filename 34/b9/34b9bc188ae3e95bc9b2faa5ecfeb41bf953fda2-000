@@ -1,0 +1,27 @@
+# 8 October 2026: speed-retime plan + storyboard sheet (before/after speed graph + frames at equal turn angle)
+import numpy as np, json, subprocess
+from PIL import Image, ImageDraw
+I0=14; N=160; FPS=24000/1001; K=3  # K = interpolation factor (source frame i -> interp index i*K)
+s=np.array(json.load(open('shifts.json')))
+s=np.where(np.arange(N)<I0,0,s); s[s<0]=0
+cum=np.cumsum(s)            # turn angle proxy (px of centre travel)
+a0,a1=cum[I0],cum[-1]
+tgt=a0+(np.arange(N)/(N-1))*(a1-a0)           # uniform angle for N output frames
+src=np.interp(tgt,cum[I0:],np.arange(I0,N))   # fractional source index
+idx=np.round(src*K).astype(int).clip(0,(N-1)*K)
+json.dump({'src_frac':src.tolist(),'interp_idx':idx.tolist(),'turn_px_total':float(a1-a0)},open('retime_plan.json','w'))
+new_speed=np.gradient(np.interp(src,np.arange(N),cum))
+# graph
+G=Image.new('RGB',(1600,520),'white'); d=ImageDraw.Draw(G)
+def plot(vals,col,lab,y):
+    m=9.0
+    pts=[(60+i*(1500/(N-1)),460-(v/m)*400) for i,v in enumerate(vals)]
+    d.line(pts,fill=col,width=3); d.text((70,y),lab,fill=col)
+plot(s,(200,60,40),'BEFORE: speed per frame (px) - static start, spin-down, second push',20)
+plot(new_speed,(30,120,60),'AFTER: constant turn speed over same 6.67 s',40)
+d.line([(60,460),(1560,460)],fill='black'); d.text((60,480),'time 0 -> 6.67 s  (160 frames @ 23.976)',fill='black')
+G.save('sheets/speed_graph.png')
+# frames strip: 12 frames at equal angle, from interpolated sources
+cols=12; sel=[int(round(i*(N-1)/(cols-1))) for i in range(cols)]
+print('selected output frames',sel)
+json.dump(sel,open('sheet_sel.json','w'))

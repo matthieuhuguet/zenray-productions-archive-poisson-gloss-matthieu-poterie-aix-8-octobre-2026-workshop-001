@@ -1,0 +1,28 @@
+# 8 October 2026: 3 lighting grades on V1 storyboard frames (parameters in GRADES, one place)
+import numpy as np, subprocess, json
+from PIL import Image, ImageDraw
+GRADES={ # gain RGB (white balance), gamma, contrast, saturation, vignette, shadow lift
+ 'A neutre studio':dict(g=(0.86,0.97,1.14),gam=0.92,con=1.06,sat=1.00,vig=0.15,lift=0.02),
+ 'B chaud doux':   dict(g=(1.00,0.93,0.86),gam=0.88,con=1.04,sat=1.05,vig=0.25,lift=0.03),
+ 'C contraste froid':dict(g=(0.90,0.99,1.10),gam=1.00,con=1.22,sat=1.12,vig=0.35,lift=0.00)}
+def grade(im,p):
+    x=im.astype(np.float32)/255
+    x=x*np.array(p['g']); x=np.clip(x,0,1)**p['gam']
+    x=(x-0.5)*p['con']+0.5+p['lift']
+    l=x.mean(2,keepdims=True); x=l+(x-l)*p['sat']
+    h,w=x.shape[:2]; yy,xx=np.mgrid[0:h,0:w]; r=np.hypot((xx-w/2)/(w/2),(yy-h/2)/(h/2))
+    x=x*(1-p['vig']*np.clip(r-0.4,0,1)**2)[...,None]
+    return (np.clip(x,0,1)*255).astype(np.uint8)
+W,H=1080,1920
+raw=subprocess.run(['ffmpeg','-v','error','-i','v1_uniform_turn.mp4','-f','rawvideo','-pix_fmt','rgb24','-'],capture_output=True,check=True).stdout
+fr=np.frombuffer(raw,np.uint8).reshape(-1,H,W,3)
+sel=[0,32,64,96,128,159]; tw,th=270,480
+S=Image.new('RGB',(tw*6,(th+22)*4),'white'); d=ImageDraw.Draw(S)
+rows=[('0 original',None)]+list(GRADES.items())
+for r,(name,p) in enumerate(rows):
+    d.text((6,r*(th+22)+4),name,fill='black')
+    for c,i in enumerate(sel):
+        im=fr[i] if p is None else grade(fr[i],p)
+        S.paste(Image.fromarray(im).resize((tw,th),Image.LANCZOS),(c*tw,r*(th+22)+22))
+S.save('sheets/storyboard_lighting_3_grades.png')
+json.dump(GRADES,open('grades.json','w'),indent=1)
