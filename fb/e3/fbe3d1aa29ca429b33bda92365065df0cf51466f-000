@@ -6,9 +6,12 @@ sys.path.insert(0,'Scripts'); from Montage import grade, read, enc, W, H, FPS
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 CFG=dict(B=7.5,A=12.5,
  gradeB=dict(g=(0.90,0.99,1.10),gam=1.00,con=1.22,sat=1.12,vig=0.50,lift=0.00),
- gradeA=dict(g=(1,1,1),gam=1.0,con=1.0,sat=1.0,vig=0.50,lift=0.0),         # A keeps its own look, only the vignette is added
+ gradeA=dict(g=(0.90,0.99,1.10),gam=1.025,con=1.15,sat=1.20,vig=0.70,lift=0.0),   # 9 Oct 2026 v4: cold blue grade of thumbnail 3 at half strength (g, gamma, contrast), saturation a little higher than half-way (1.20)
  title_start=0.5,title_top=90,   # title bbox top (px) in the final frame; frames are rendered with bbox top at y=626
  sub=dict(font='/Users/zenray/Library/Fonts/Vogun-Medium.ttf',size=84,y=1790,start=0.5,fade_in=1.0,stay=2.0,fade_out=1.0,shadow=0.55,blur=8),
+ sfx=[dict(file='sound-inv-open/DS26_Inv_Open.mp3',onset=0.0285,peak=0.5,when='sub_in'),
+      dict(file='sound-mail-open/DS10_Mail_Open.mp3',onset=0.0464,peak=0.5,when='sub_out',only=0),     # only = index of the clip (0 = B 'Before', 1 = A 'After')
+      dict(file='sound-botw-interact/final/F1_Trigger_minus20ms.flac',cut=1.225,onset=0.010,peak=0.5,when='sub_out',only=1)],   # 9 Oct 2026: attack (landing at 1.235 s) of the botw sfx on the 'After' disappearance   # sub_in = fade-in start, sub_out = fade-out start   # onset measured: 2% of peak energy at 28.5 ms; aligned with the subtitle fade-in start
  music_start=216,fade=0.25,swell=dict(db=4.0,rise=0.25,release=0.5))
 B,A=CFG['B'],CFG['A']; D=B+A; SR=48000
 def sub_layer(text):
@@ -26,29 +29,41 @@ def over(f,layer,al):
     if al<=0: return f
     l=layer.copy(); l[...,3]=(l[...,3]*al).astype(np.uint8)
     return np.array(Image.alpha_composite(Image.fromarray(f).convert('RGBA'),Image.fromarray(l)).convert('RGB'))
-vb=read(f'u/B_{B:g}s.mp4'); va=read(f'u/A_{A:g}s.mp4'); assert len(vb)==round(B*FPS) and len(va)==round(A*FPS),(len(vb),len(va))
-tf=[np.array(Image.open(f'title/frames/{i:04d}.png').convert('RGBA')) for i in range(96)]
-dy=CFG['title_top']-626
-def shift_up(t):
-    L=np.zeros_like(t); L[:H+dy]=t[-dy:]; return L
-subB,subA=sub_layer('Before'),sub_layer('After'); out=[]
-for i in range(len(vb)+len(va)):
-    t=i/FPS; isB=i<len(vb)
-    f=grade(vb[i] if isB else va[i-len(vb)],CFG['gradeB'] if isB else CFG['gradeA'])
-    k=i-int(CFG['title_start']*FPS)
-    if 0<=k<len(tf): f=np.array(Image.alpha_composite(Image.fromarray(f).convert('RGBA'),Image.fromarray(shift_up(tf[k]))).convert('RGB'))
-    f=over(f,subB,alpha(t,CFG['sub']['start'])) if isB else over(f,subA,alpha(t,B+CFG['sub']['start']))
-    out.append(f)
-enc(out,'_video.mp4')
+import os
+REUSE=os.environ.get('REUSE_VIDEO')
+
+if not REUSE:
+    vb=read(f'u/B_{B:g}s.mp4'); va=read(f'u/A_{A:g}s.mp4'); assert len(vb)==round(B*FPS) and len(va)==round(A*FPS),(len(vb),len(va))
+    tf=[np.array(Image.open(f'title/frames/{i:04d}.png').convert('RGBA')) for i in range(96)]
+    dy=CFG['title_top']-626
+    def shift_up(t):
+        L=np.zeros_like(t); L[:H+dy]=t[-dy:]; return L
+    subB,subA=sub_layer('Before'),sub_layer('After'); out=[]
+    for i in range(len(vb)+len(va)):
+        t=i/FPS; isB=i<len(vb)
+        f=grade(vb[i] if isB else va[i-len(vb)],CFG['gradeB'] if isB else CFG['gradeA'])
+        k=i-int(CFG['title_start']*FPS)
+        if 0<=k<len(tf): f=np.array(Image.alpha_composite(Image.fromarray(f).convert('RGBA'),Image.fromarray(shift_up(tf[k]))).convert('RGB'))
+        f=over(f,subB,alpha(t,CFG['sub']['start'])) if isB else over(f,subA,alpha(t,B+CFG['sub']['start']))
+        out.append(f)
+    enc(out,'_video.mp4')
+
 raw=subprocess.run(['ffmpeg','-v','error','-ss',str(CFG['music_start']),'-t',str(D),'-i','music/in-spite-of-everything.mp3','-af','loudnorm=I=-16:TP=-1.5','-ar',str(SR),'-ac','2','-f','f32le','-'],capture_output=True,check=True).stdout
 m=np.frombuffer(raw,np.float32).reshape(-1,2).copy(); N=len(m); t=np.arange(N)/SR
 eob=lambda u:(lambda u,c1=1.70158:1+(c1+1)*(u-1)**3+c1*(u-1)**2)(np.clip(u,0,1))
 sw=CFG['swell']; g=10**(sw['db']/20); T=B
 env=np.ones(N); r=(t>=T-sw['rise'])&(t<T); env[r]=1+(g-1)*(t[r]-(T-sw['rise']))/sw['rise']   # rises over 0.25 s into the cut
 rel=(t>=T)&(t<T+sw['release']); env[rel]=g-(g-1)*(t[rel]-T)/sw['release']                   # then eases back
-m*=(env*eob(t/CFG['fade'])*eob((D-t)/CFG['fade'])*0.85)[:,None]; m=np.clip(m,-0.99,0.99)
-subprocess.run(['ffmpeg','-v','error','-y','-i','_video.mp4','-f','f32le','-ar',str(SR),'-ac','2','-i','-','-map','0:v','-map','1:a','-c:v','copy','-c:a','aac','-b:a','192k','-shortest',f'montage_{D:g}s_B{B:g}_A{A:g}.mp4'],input=m.astype(np.float32).tobytes(),check=True)
-import os; os.remove('_video.mp4')
-# thumbnail: video A, fish centred (frame index THUMB), title on top
-THUMB=280; f=grade(va[THUMB],CFG['gradeA']); k=60
-Image.alpha_composite(Image.fromarray(f).convert('RGBA'),Image.fromarray(shift_up(tf[k]))).convert('RGB').save('thumbnail_A_titre_haut.png'); print('done',D)
+# SFX 'Inv Open' placed so its onset lands exactly on each subtitle appearance (Before at B-start+0.5 s, After at A-start+0.5 s)
+sfxtrack=np.zeros_like(m); S_=CFG['sub']
+for sf in CFG['sfx']:
+    sx=np.frombuffer(subprocess.run(['ffmpeg','-v','error','-ss',str(sf.get('cut',0)),'-i',sf['file'],'-ac','2','-ar',str(SR),'-f','f32le','-'],capture_output=True,check=True).stdout,np.float32).reshape(-1,2).copy()
+    sx*=sf['peak']/abs(sx).max()
+    off=0 if sf['when']=='sub_in' else S_['fade_in']+S_['stay']
+    for ci,ts in enumerate((S_['start']+off,B+S_['start']+off)):
+        if sf.get('only',ci)!=ci: continue
+        s0=int(round((ts-sf['onset'])*SR)); sfxtrack[s0:s0+len(sx)]+=sx; print(sf['file'].split('/')[-1],'file starts %.4f s, onset at %.4f s'%(s0/SR,ts))
+m*=(env*eob(t/CFG['fade'])*eob((D-t)/CFG['fade'])*0.85)[:,None]; m=np.clip(m+sfxtrack,-0.99,0.99)
+subprocess.run(['ffmpeg','-v','error','-y','-i',REUSE or '_video.mp4','-f','f32le','-ar',str(SR),'-ac','2','-i','-','-map','0:v','-map','1:a','-c:v','copy','-c:a','aac','-b:a','192k','-shortest',os.environ.get('OUT',f'montage_{D:g}s_B{B:g}_A{A:g}_v4.mp4')],input=m.astype(np.float32).tobytes(),check=True)
+
+print('done',D)
