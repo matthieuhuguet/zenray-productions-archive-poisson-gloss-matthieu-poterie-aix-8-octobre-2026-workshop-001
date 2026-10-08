@@ -1,0 +1,128 @@
+# 8 October 2026: BotW interact sound -> 3 Japanese premium variants (numpy). Original pitches kept: C5 D#5 F5 A#5 (+D#6).
+import numpy as np, soundfile as sf
+from scipy.signal import butter, sosfilt, fftconvolve, resample_poly
+
+SR = 48000
+rng = np.random.default_rng(7)
+P = dict(  # HDA-style parameters, one place
+    pitch={'C5': 523.25, 'Eb5': 622.25, 'F5': 698.46, 'G5': 783.99, 'Ab5': 830.61, 'Bb5': 932.33, 'C6': 1046.5, 'Eb6': 1244.5, 'G6': 1568.0},
+    master_peak=0.5)
+
+def t_(n): return np.arange(int(n * SR)) / SR
+def place(buf, sig, at, g=1.0, pan=0.0):
+    i = int(at * SR); n = min(len(sig), buf.shape[1] - i)
+    if n <= 0: return
+    l = g * np.cos((pan + 1) * np.pi / 4); r = g * np.sin((pan + 1) * np.pi / 4)
+    buf[0, i:i+n] += sig[:n] * l; buf[1, i:i+n] += sig[:n] * r
+
+def koto(f, dur=1.6, bend=0.035, bright=1.0):
+    """Plucked string: additive, slightly inharmonic, oshide pitch bend (koto push) on the attack."""
+    t = t_(dur); ph = np.zeros_like(t)
+    fi = f * (1 + bend * np.exp(-t / 0.035))   # push-pitch settling down to f
+    ph = 2 * np.pi * np.cumsum(fi) / SR
+    s = np.zeros_like(t)
+    for k in range(1, 9):
+        a = (1 / k ** 1.15) * (bright ** (k - 1)) * (1 if k != 5 else 0.6)
+        s += a * np.sin(k * ph * (1 + 0.0004 * k * k)) * np.exp(-t / (1.1 / (1 + 0.45 * (k - 1))))
+    pluck = rng.standard_normal(len(t)) * np.exp(-t / 0.004)
+    pluck = sosfilt(butter(2, [1800, 6500], 'bp', fs=SR, output='sos'), pluck)
+    s = s + 0.25 * pluck
+    s *= np.minimum(1, t / 0.0015)
+    return s / np.abs(s).max()
+
+def rin(f, dur=3.2, g_beat=0.6):
+    """Singing bowl: inharmonic partials, slow beating pairs, long bloom."""
+    t = t_(dur); s = np.zeros_like(t)
+    for r, a, dec, beat in [(1, 1, 2.2, 1.7), (2.71, .55, 1.6, 2.3), (5.4, .22, .9, 3.1), (8.9, .08, .5, 4.0)]:
+        s += a * np.exp(-t / dec) * (np.sin(2 * np.pi * f * r * t) + g_beat * np.sin(2 * np.pi * (f * r + beat) * t)) / (1 + g_beat)
+    s *= np.minimum(1, t / 0.004) * (1 - np.exp(-t / 0.05) * 0.0)
+    return s / np.abs(s).max()
+
+def suzu(dur=0.7, lo=5200, hi=9500, rate=38):
+    """Shrine bell shimmer: dense tiny metallic bursts, fast decay."""
+    t = t_(dur); s = np.zeros_like(t)
+    for _ in range(int(rate * dur * 3)):
+        at = rng.exponential(dur / 3.5)
+        if at > dur - 0.03: continue
+        f = rng.uniform(lo, hi); i = int(at * SR); n = int(0.03 * SR)
+        tt = np.arange(n) / SR
+        s[i:i+n] += rng.uniform(.3, 1) * np.sin(2 * np.pi * f * tt) * np.exp(-tt / 0.006)
+    s *= np.exp(-t / (dur / 3))
+    return s / np.abs(s).max()
+
+def tsuzumi_tap(dur=0.25, f=190):
+    """Soft hand-drum thump for satisfying body."""
+    t = t_(dur); fi = f * (1 + 1.2 * np.exp(-t / 0.02))
+    s = np.sin(2 * np.pi * np.cumsum(fi) / SR) * np.exp(-t / 0.05)
+    return s / np.abs(s).max()
+
+def hall(buf, wet, rt=1.6, pre=0.012, damp=7000, seed=3):
+    """Wooden-temple reverb: synthetic IR, pre-delay, damped tail, decorrelated L/R."""
+    r = np.random.default_rng(seed); n = int(rt * 1.5 * SR); t = np.arange(n) / SR
+    out = np.zeros_like(buf)
+    for c in range(2):
+        ir = r.standard_normal(n) * np.exp(-6.9 * t / rt)
+        ir = sosfilt(butter(2, damp, 'lp', fs=SR, output='sos'), ir)
+        ir = np.concatenate([np.zeros(int(pre * SR) + c * 37), ir])
+        out[c] = fftconvolve(buf[c], ir)[:buf.shape[1]]
+    out /= np.abs(out).max() + 1e-9
+    return buf + wet * out * np.abs(buf).max()
+
+def finalize(buf, name, tail_fade=0.35, lp=14000, hp=70):
+    buf = sosfilt(butter(2, hp, 'hp', fs=SR, output='sos'), buf, axis=1)
+    buf = sosfilt(butter(2, lp, 'lp', fs=SR, output='sos'), buf, axis=1)
+    buf[:, :int(.004 * SR)] *= np.linspace(0, 1, int(.004 * SR))   # anti-click fade-in
+    n = buf.shape[1]; f = int(tail_fade * SR); buf[:, -f:] *= np.linspace(1, 0, f) ** 2
+    buf = np.tanh(buf * 1.1 / np.abs(buf).max() * 0.95) / np.tanh(1.05)   # gentle glue, no hard clip
+    buf *= P['master_peak'] / np.abs(buf).max()
+    sf.write(f'out/{name}.wav', buf.T, SR, subtype='PCM_24')
+    return buf
+
+def original():
+    x, sr = sf.read('src/orig.flac'); x = resample_poly(x, SR, sr, axis=0).T
+    return x
+
+def make(n):
+    return np.zeros((2, int(n * SR)))
+
+F = P['pitch']
+# ---------- V1 KOTO SHRINE: signature arpeggio D#5 C5 F5 A#5 replayed on koto, original shimmer underneath, warm hall.
+def v1():
+    b = make(3.4); o = original()
+    o = sosfilt(butter(2, [250, 9000], 'bp', fs=SR, output='sos'), o, axis=1)
+    place(b, o[0], 0, .35, -.3); place(b, o[1], 0, .35, .3)
+    for at, k, pan, g in [(0.05, 'Eb5', -.35, .8), (0.14, 'C5', .15, .75), (0.23, 'F5', -.1, .8), (0.33, 'Bb5', .3, .9), (0.46, 'Eb6', 0, .5)]:
+        place(b, koto(F[k]), at, g, pan)
+    place(b, suzu(.8, 6200, 10000), 0.46, .09, .4)
+    return finalize(hall(b, .42, 1.9), 'V1_KotoShrine', 0.8)
+
+# ---------- V2 SUZU SPARKLE: addictive, tight rising run in Hirajoshi (C D Eb G Ab), lands up on C6 with sparkle.
+def v2():
+    b = make(2.2); o = original()
+    o = sosfilt(butter(2, [400, 9000], 'bp', fs=SR, output='sos'), o, axis=1)
+    place(b, o[0][:int(1.0 * SR)], 0, .45, -.3); place(b, o[1][:int(1.0 * SR)], 0, .45, .3)
+    seq = [(0.02, 'Eb5', -.4), (0.08, 'C5', .1), (0.14, 'F5', -.1), (0.20, 'Bb5', .25), (0.27, 'C6', -.2), (0.34, 'Eb6', .2), (0.42, 'G6', 0)]
+    for i, (at, k, pan) in enumerate(seq):
+        place(b, koto(F[k], 1.1, .03, 1.15), at, .55 + .06 * i, pan)
+    place(b, suzu(.9, 5600, 11000, 55), 0.36, .22, 0); place(b, suzu(.5, 7000, 12000, 40), 0.0, .1, .5)
+    place(b, rin(F['G6'] / 2, 1.8), 0.42, .22, 0)
+    return finalize(hall(b, .30, 1.2, damp=9000), 'V2_SuzuSparkle', 0.5, lp=16000)
+
+# ---------- V3 RIN ZEN: satisfying + relaxing: soft tsuzumi tap, bowl bloom on C5/F5, slow koto resolve, long tail.
+def v3():
+    b = make(4.8); o = original()
+    o = sosfilt(butter(2, [200, 6000], 'bp', fs=SR, output='sos'), o, axis=1)
+    place(b, o[0], 0.0, .28, -.25); place(b, o[1], 0.0, .28, .25)
+    place(b, tsuzumi_tap(), 0.0, .55, 0)
+    place(b, rin(F['C5'] / 2, 4.4), 0.02, .75, -.1)      # C4 bowl body
+    place(b, rin(F['C5'], 4.0), 0.06, .5, .15)
+    place(b, rin(F['F5'], 3.4), 0.30, .32, -.2)
+    for at, k, pan, g in [(0.10, 'Eb5', -.3, .6), (0.24, 'F5', .1, .55), (0.42, 'Bb5', .3, .55), (0.70, 'C6', 0, .45)]:
+        place(b, koto(F[k], 2.2, .03, .85), at, g, pan)
+    place(b, suzu(1.0, 5500, 9000, 30), 0.70, .07, .3)
+    return finalize(hall(b, .55, 2.6, 0.02, 5500), 'V3_RinZen', 1.4, lp=12000)
+
+if __name__ == '__main__':
+    import os; os.makedirs('out', exist_ok=True)
+    for f in (v1, v2, v3): f()
+    print('ok')

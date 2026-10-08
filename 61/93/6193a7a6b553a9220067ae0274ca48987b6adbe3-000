@@ -1,0 +1,58 @@
+# 8 October 2026: 9 truly different treatments of the same smooth original. Rules: recognizable, silky (no grain), premium, Japanese, relaxing/satisfying/addictive.
+import sys; sys.path.insert(0,'Scripts')
+import numpy as np
+from scipy.signal import butter, sosfilt, resample_poly
+import MakeVariants as M, MakeSimple as S
+SR=M.SR; F=M.F; lp=lambda x,f,o=2: sosfilt(butter(o,f,'lp',fs=SR,output='sos'),x,axis=-1)
+t_=lambda n: np.arange(int(n*SR))/SR
+O=S.base()
+def canvas(sec): return M.make(sec)
+def put(b,x,at,g=1.0,pan=None):
+    i=int(at*SR); n=min(x.shape[-1],b.shape[1]-i)
+    if x.ndim==1: M.place(b,x,at,g,pan or 0)
+    else: b[:,i:i+n]+=g*x[:,:n]
+def out(name,b,hall=.25,rt=1.8,tail=.8,low=0.0):
+    if low: M.place(b,M.rin(F['C5']/2,3.5),0,low,0)
+    b=S.silk_hall(b,hall,rt); return M.finalize(b,name,tail,lp=8500)
+def bell(f,dur=2.4,idx=1.2,ratio=3.5,dec=.5):  # smooth FM tine, no noise
+    t=t_(dur); env=np.exp(-t/dec)
+    s=np.sin(2*np.pi*f*t+idx*env*np.sin(2*np.pi*f*ratio*t))*np.minimum(1,t/.004)*np.exp(-t/(dec*1.8))
+    return lp(s/np.abs(s).max(),3400,4)
+def sho(freqs,dur=4.0,att=.9):  # mouth-organ chord: stacked partials, slow swell, tiny vibrato
+    t=t_(dur); s=0
+    for f in freqs:
+        v=1+.0015*np.sin(2*np.pi*4.7*t)
+        for k,a in [(1,1),(2,.5),(3,.28)]: s=s+a*np.sin(2*np.pi*f*k*t*v)/ (1+len(freqs)*0)
+    s*=(1-np.exp(-t/(att/3)))*np.exp(-np.maximum(t-att,0)/1.6); return lp(s/np.abs(s).max(),3200)
+def rev(x): return x[..., ::-1]
+if __name__=='__main__':
+    L=O.shape[1]/SR
+    # 1 REVERSE BLOOM: reversed hall swells into the original
+    b=canvas(L+3.2); put(b,O,1.2,1.0); pre=S.silk_hall(np.pad(O,((0,0),(0,int(1.4*SR)))),1.2,1.2); pre=pre[:,:int(1.2*SR)+O.shape[1]]
+    pre=lp(rev(pre[:,:int(1.2*SR)]),3500); pre*=np.linspace(0,1,pre.shape[1])**2; put(b,pre,0,.55)
+    out('N1_ReverseBloom',b,.18,1.6,.8,low=.0)
+    # 2 TEMPLE OCTAVE DOWN: original + itself one octave lower (big bell body)
+    d=resample_poly(O,2,1,axis=1); b=canvas(d.shape[1]/SR+2); put(b,d,0,.8); put(b,O,0,.7); out('N2_TempleOctaveDown',b,.28,2.2,1.0)
+    # 3 MUSIC BOX: original an octave up, delicate, with the original underneath very low
+    u=lp(resample_poly(O,1,2,axis=1),3800,4); b=canvas(L+2.4); put(b,u,0,.9); put(b,O,0.0,.35); out('N3_MusicBox',b,.28,1.6,.8)
+    # 4 SHIMMER: reverb tail pitched +1 octave floating above
+    b=canvas(L+4.2); put(b,O,0,1.0); w=S.silk_hall(np.pad(O,((0,0),(0,int(3*SR)))),1.0,2.6); tail=w-np.pad(O,((0,0),(0,w.shape[1]-O.shape[1])))
+    sh=lp(resample_poly(tail,1,2,axis=1),5000); sh*=np.minimum(1,np.arange(sh.shape[1])/(.25*SR)); put(b,sh,0.05,.55); out('N4_Shimmer',b,.15,1.4,1.4)
+    # 5 HARP GLISSANDO: smooth FM tines run up the Hirajoshi scale into the original's last note
+    b=canvas(L+3); put(b,O,0.0,.8); sc=['C5','Eb5','F5','G5','Bb5','C6','Eb6']
+    for i,k in enumerate(sc[::-1][::-1]): put(b,bell(F[k] if k in F else F['Eb6'],2.2,.5,2.0,.35),.05+.045*i,.09,(-.5+i/6))
+    out('N5_HarpGliss',b,.26,1.8,.8,low=.07)
+    # 6 CALL AND RESPONSE: original, then a softer answer a fifth up (addictive ping-pong)
+    g=resample_poly(O,2,3,axis=1); g=lp(g,5500); b=canvas(L+3); put(b,O,0,1.0); put(b,g,.34,.45); out('N6_CallResponse',b,.25,1.8,.8,low=.07)
+    # 7 FM TINE: original softened + glassy DX tine playing the arpeggio an octave up
+    b=canvas(L+3); put(b,lp(O,2600),0,.75)
+    for k,at in [('Eb5',.06),('C5',.14),('F5',.22),('Bb5',.32)]: put(b,bell(F[k]*2,2.4,.3,2.0,.5),at,.06,(.3 if at<.2 else -.3))
+    out('N7_FMTine',b,.26,1.8,.8,low=.06)
+    # 8 FILTER BLOOM: original through a slowly opening lowpass (muffled to bright, "satisfying open")
+    n=O.shape[1]; fcs=[350*((9000/350)**(k/7)) for k in range(8)]; V=[lp(O,f,2) for f in fcs]; V[-1]=O
+    pos=np.linspace(0,1,n)**0.8*(len(V)-1); y=np.zeros_like(O)
+    for k in range(len(V)): y+=V[k]*np.clip(1-np.abs(pos-k),0,1)
+    b=canvas(L+3); put(b,y,0,1.1); out('N8_FilterBloom',b,.28,2.0,.9,low=.08)
+    # 9 SHO CHORD: held mouth-organ cluster (C Eb F Bb) swells under the original -> relaxing temple air
+    b=canvas(4.6); put(b,O,0.0,.9); put(b,sho([F['C5']/2,F['Eb5']/2,F['F5']/2,F['Bb5']/2],4.2,.7),0,.30,0); out('N9_ShoChord',b,.26,2.2,1.4)
+    print('ok')

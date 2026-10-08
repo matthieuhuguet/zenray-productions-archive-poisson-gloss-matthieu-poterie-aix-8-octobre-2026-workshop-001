@@ -1,0 +1,14 @@
+# 8 October 2026: AM index = depth of 8-30 Hz amplitude wobble inside each partial's band (the sideband grain), in dB re the partial level.
+import numpy as np, soundfile as sf
+from scipy.signal import butter, sosfiltfilt, hilbert
+PART=[526.6,627.9,702.9,938.2]
+def am(path,t0=1.25,t1=2.3,fm=(8,30)):
+    x,sr=sf.read(path); m=x.mean(1)[int(t0*sr):int(t1*sr)]; out=[]
+    for f in PART:
+        b=sosfiltfilt(butter(4,[f-34,f+34],'bp',fs=sr,output='sos'),m); e=np.abs(hilbert(b)); e=e-np.polyval(np.polyfit(np.arange(len(e)),e,3),np.arange(len(e)))
+        S=np.abs(np.fft.rfft(e*np.hanning(len(e))))**2; fr=np.fft.rfftfreq(len(e),1/sr)
+        out.append(10*np.log10(S[(fr>=fm[0])&(fr<=fm[1])].sum()/(np.mean(np.abs(hilbert(b)))**2*len(e)+1e-18)+1e-18))
+    return out
+if __name__=='__main__':
+    import sys
+    for p in sys.argv[1:]: print(f"{p.split('/')[-1][:-4]:28s}", ' '.join(f'{v:6.1f}' for v in am(p)), ' dB (526 628 703 938)')

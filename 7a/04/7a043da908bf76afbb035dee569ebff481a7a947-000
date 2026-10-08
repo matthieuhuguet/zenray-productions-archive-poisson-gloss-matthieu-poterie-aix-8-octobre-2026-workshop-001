@@ -1,0 +1,21 @@
+# 8 October 2026: N1 ReverseBloom + N2 octave-down body triggered exactly when the reverse swell ends. 3 near-identical versions, trigger offset in ms.
+import sys; sys.path.insert(0,'Scripts')
+import numpy as np
+from scipy.signal import resample_poly
+import MakeVariants as M, MakeSimple as S, MakeNine as N
+SR=M.SR; O=N.O; lp=N.lp
+SWELL=1.2   # reverse swell length = time where the original lands (unchanged from N1)
+P=dict(  # HDA-style parameters, one place
+    A=dict(name='F1_Trigger_minus20ms',off_ms=-20), B=dict(name='F2_Trigger_0ms',off_ms=0), C=dict(name='F3_Trigger_plus20ms',off_ms=20),
+    low_gain=1.0, fade_ms=4.0, hall=.18, rt=1.6, tail=.8)
+def build(name,off_ms):
+    L=O.shape[1]/SR; b=M.make(L+SWELL+3.2)
+    N.put(b,O,SWELL,1.0)                                         # the original, landing at SWELL (exact N1)
+    pre=S.silk_hall(np.pad(O,((0,0),(0,int(1.4*SR)))),1.2,1.2)[:,:int(SWELL*SR)+O.shape[1]]
+    pre=lp(N.rev(pre[:,:int(SWELL*SR)]),3500); pre*=np.linspace(0,1,pre.shape[1])**2; N.put(b,pre,0,.55)   # reverse swell (exact N1)
+    d=resample_poly(O,2,1,axis=1); fi=int(P['fade_ms']/1000*SR); d[:,:fi]*=np.linspace(0,1,fi)   # N2 body, de-clicked
+    at=SWELL+off_ms/1000; N.put(b,d,at,P['low_gain'])
+    return N.out(name,b,P['hall'],P['rt'],P['tail'])
+if __name__=='__main__':
+    for k in 'ABC': build(P[k]['name'],P[k]['off_ms'])
+    print('ok')

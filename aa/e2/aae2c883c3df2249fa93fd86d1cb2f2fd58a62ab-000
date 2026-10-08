@@ -1,0 +1,6 @@
+# Draft protocol: de-graining a game UI sound (8 October 2026), NOT yet consigned in zenray-edit (waiting for Matthieu's validation)
+- 8 October 2026: Diagnosis by measurement: the grain is IN the source: AM sidebands at +-12..25 Hz (about -27 dB) around the 5 partials 526.6 / 627.9 / 702.9 / 938.2 / 1256.1 Hz. Reverb/delay effects only prolonged it.
+- 8 October 2026: Method: decompose (comb band-pass per partial) -> clean -> recompose in the F1 structure (1.2 s reverse swell, original lands at 1.2 s, octave-down body at -20 ms).
+- 8 October 2026: G1 additive (narrow +-14 Hz comb), G2 flatten (bands +-34 Hz, envelope low-passed at 6 Hz, phase kept), G3 = G2 + original attack residual (35 ms, lowpass 3.5 kHz, gain .55).
+- 8 October 2026: Meter: Scripts/AmIndex.py (8-30 Hz wobble per partial). Pitches verified within 1 Hz of the source.
+- 8 October 2026: Scripts: Scripts/MakeDecomp.py (parameters in dict P), Rough.py, AmIndex.py in /Users/zenray/.claude/tmp/tmp-botw-interact-sound/Scripts/

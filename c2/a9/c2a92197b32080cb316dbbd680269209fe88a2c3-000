@@ -1,0 +1,40 @@
+# 8 October 2026: simple variants = the ORIGINAL kept dominant, only gentle polish + one tiny Japanese touch.
+import sys; sys.argv=['x']
+import numpy as np, soundfile as sf
+from scipy.signal import butter, sosfilt
+sys.path.insert(0,'Scripts')
+import MakeVariants as M
+SR=M.SR; F=M.F
+def base():
+    o=M.original()
+    # gentle polish: warmth (low shelf-ish boost via parallel lowpass), air (parallel highpass), no timbre replacement
+    warm=sosfilt(butter(2,900,'lp',fs=SR,output='sos'),o,axis=1)
+    air=sosfilt(butter(2,3500,'hp',fs=SR,output='sos'),o,axis=1)
+    o=sosfilt(butter(4,6500,'lp',fs=SR,output='sos'),o+0.15*warm,axis=1)   # no air boost: it amplified grain
+    return o
+def silk_hall(buf,wet,rt,pre=0.010,damp=3800,seed=11):
+    # smooth IR: heavily damped, fade-in ramp, double lowpass -> no grainy 'sizzle'
+    from scipy.signal import fftconvolve
+    r=np.random.default_rng(seed); n=int(rt*1.4*SR); t=np.arange(n)/SR; out=np.zeros_like(buf)
+    for c in range(2):
+        ir=r.standard_normal(n)*np.exp(-6.9*t/rt)*(1-np.exp(-t/0.02))
+        sos=butter(4,damp,'lp',fs=SR,output='sos'); ir=sosfilt(sos,ir)
+        # frequency-dependent decay: darker as it decays
+        ir=ir*0.5+0.5*sosfilt(butter(2,1400,'lp',fs=SR,output='sos'),ir)*np.exp(-t/rt)*3
+        ir=np.concatenate([np.zeros(int(pre*SR)+c*41),ir]); out[c]=fftconvolve(buf[c],ir)[:buf.shape[1]]
+    out/=np.abs(out).max()+1e-9
+    return buf+wet*out*np.abs(buf).max()
+
+def build(name,tap=0,bowl=None,hall=.22,rt=1.4,tail=0.6):
+    o=base(); n=o.shape[1]/SR+ (rt if bowl or hall else 0.3)
+    b=M.make(n); b[:,:o.shape[1]]+=o*1.0
+    if tap: M.place(b,M.tsuzumi_tap(),0,tap,0)
+    if bowl:
+        for f,at,g in bowl: M.place(b,M.rin(f,3.5),at,g,0)
+    b=silk_hall(b,hall,rt)
+    return M.finalize(b,name,tail,lp=8500)
+if __name__=='__main__':
+    build('P1_Smooth',hall=.20,rt=1.2)
+    build('P2_Smooth_TapBowl',tap=.10,bowl=[(F['C5']/2,0.0,.10)],hall=.24,rt=1.6)
+    build('P3_Smooth_BowlBloom',tap=.06,bowl=[(F['C5']/2,0.0,.12),(F['F5']/2,0.30,.07)],hall=.30,rt=2.2,tail=1.0)
+    print('ok')

@@ -1,0 +1,37 @@
+# 8 October 2026: 3 NEW directions from P2 (original + silky hall + low bowl base): glass, slowed-wide, wood.
+import sys; sys.path.insert(0,'Scripts')
+import numpy as np, soundfile as sf
+from scipy.signal import butter, sosfilt, resample_poly
+import MakeVariants as M, MakeSimple as S
+SR=M.SR; F=M.F
+def t_(n): return np.arange(int(n*SR))/SR
+def glass(f,dur=2.2):
+    t=t_(dur); s=np.sin(2*np.pi*f*t)+0.25*np.sin(2*np.pi*2*f*t)*np.exp(-t/0.3)
+    s*=np.exp(-t/0.55)*np.minimum(1,t/0.006); return s/np.abs(s).max()
+def wood(f=430,dur=0.3):
+    t=t_(dur); s=(np.sin(2*np.pi*f*t)+0.5*np.sin(2*np.pi*f*1.51*t))*np.exp(-t/0.028)*np.minimum(1,t/0.0015)
+    return sosfilt(butter(2,2200,'lp',fs=SR,output='sos'),s/np.abs(s).max())
+def widen(b,amt=.35):
+    m=(b[0]+b[1])/2; s=(b[0]-b[1])/2; d=np.roll(s,int(.011*SR)); return np.stack([m+(1+amt)*d, m-(1+amt)*d])
+def mix(name,o,items,hall,rt,tail,wide=0,bowl=.10):
+    n=o.shape[1]/SR+rt+.3; b=M.make(n); b[:,:o.shape[1]]+=o
+    for sig,at,g,pan in items: M.place(b,sig,at,g,pan)
+    if bowl: M.place(b,M.rin(F['C5']/2,3.5),0,bowl,0)
+    if wide: b=b+0.0*b; b=b+widen(b,wide)*0.0 if False else b
+    b=S.silk_hall(b,hall,rt)
+    if wide:
+        b=M.sosfilt(M.butter(2,3000,'lp',fs=SR,output='sos'),b,axis=1)*0+b  # keep
+        L,R=b; d=np.roll(L-R,0); mid=(L+R)/2; side=(L-R)/2*(1+wide); b=np.stack([mid+side,mid-side])
+    return M.finalize(b,name,tail,lp=8500)
+if __name__=='__main__':
+    o=S.base()
+    # R1 GLASS: pure crystal sines (no noise) double the arpeggio an octave up, very quiet -> premium UI shimmer
+    notes=[('Eb5',.06),('C5',.14),('F5',.22),('Bb5',.32)]
+    mix('R1_Glass',o,[(glass(F[k]*2 if k!='Bb5' else F[k]*2),at,.045,(-.3 if i%2 else .3)) for i,(k,at) in enumerate(notes)],.26,1.8,.8)
+    # R2 SLOWED: original stretched x1.25 (pitch kept), wide, long silky tail -> cinematic calm
+    x,sr=sf.read('src/slow.wav'); x=resample_poly(x,SR,sr,axis=0).T
+    x=sosfilt(butter(4,6500,'lp',fs=SR,output='sos'),x+0.15*sosfilt(butter(2,900,'lp',fs=SR,output='sos'),x,axis=1),axis=1)
+    mix('R2_Slowed',x,[],.30,2.4,1.2,wide=.5,bowl=.12)
+    # R3 WOOD: soft mokugyo-like wooden knock on the first note + original -> tactile, satisfying
+    mix('R3_Wood',o,[(wood(430),0.0,.16,0),(wood(645),0.14,.05,.2)],.22,1.5,.6,bowl=.08)
+    print('ok')

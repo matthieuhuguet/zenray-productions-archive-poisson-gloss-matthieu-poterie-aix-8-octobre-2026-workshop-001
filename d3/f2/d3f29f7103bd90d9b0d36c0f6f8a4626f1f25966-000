@@ -1,0 +1,55 @@
+# 8 October 2026: decompose -> clean -> recompose. Source roughness = AM sidebands (+-12..25 Hz, -27 dB) around 5 partials: 526.6 627.9 702.9 938.2 1256.1 Hz.
+import sys; sys.path.insert(0,'Scripts')
+import numpy as np
+from scipy.signal import butter, sosfiltfilt, sosfilt, hilbert, fftconvolve, resample_poly
+import MakeVariants as M, MakeSimple as S, MakeNine as N
+SR=M.SR
+P=dict(  # HDA-style parameters, one place
+    partials=[526.6,627.9,702.9,938.2,1256.1],
+    h1_halfwidth=14, h2_halfwidth=34, h2_env_cut=6.0,
+    h3_resid_ms=35, h3_resid_gain=.55, h3_resid_lp=3500,
+    swell=1.2, body_offset_ms=-20, swell_gain=.55, hall_wet=.18, rt=1.6, tail=.8, low_gain=1.0, fade_ms=4.0)
+def bp(x,lo,hi,o=4): return sosfiltfilt(butter(o,[lo,hi],'bp',fs=SR,output='sos'),x,axis=-1)
+def lpf(x,f,o=4): return sosfilt(butter(o,f,'lp',fs=SR,output='sos'),x,axis=-1)
+
+def smooth_hall(buf,wet,rt,pre=.010,damp=3800,seg=.01,seed=11):
+    """Flat-magnitude random-phase IR segments: a steady tone keeps a steady amplitude (no Rayleigh wobble)."""
+    r=np.random.default_rng(seed); n=int(rt*1.4*SR); sl=int(seg*SR); out=np.zeros_like(buf)
+    for c in range(2):
+        ir=np.zeros(n+2*sl); w=np.hanning(2*sl)
+        for k in range(0,n,sl//2):
+            spec=np.exp(1j*r.uniform(0,2*np.pi,sl+1)); s=np.fft.irfft(spec,2*sl)*w
+            ir[k:k+2*sl]+=s*np.exp(-6.9*(k/SR)/rt)*(1-np.exp(-(k/SR)/.02))
+        ir=lpf(ir,damp)[:n]; ir=np.concatenate([np.zeros(int(pre*SR)+c*41),ir]); out[c]=fftconvolve(buf[c],ir)[:buf.shape[1]]
+    out/=np.abs(out).max()+1e-9; return buf+wet*out*np.abs(buf).max()
+
+def raw(): return M.original()
+def base2(x):  # same polish as the F1 base (warmth + 6.5 kHz lowpass), applied AFTER cleaning
+    return lpf(x+0.15*lpf(x,900,2),6500,4)
+# ---- three cleaning hypotheses -------------------------------------------------
+def h1_additive(x):   # narrow comb rebuild: only the 5 partials, sidebands and noise discarded
+    return sum(bp(x,f-P['h1_halfwidth'],f+P['h1_halfwidth']) for f in P['partials'])
+def h2_flatten(x):    # keep each partial's band incl. sidebands, remove the fast amplitude wobble, keep the phase
+    y=0
+    for f in P['partials']:
+        b=bp(x,f-P['h2_halfwidth'],f+P['h2_halfwidth']); a=hilbert(b,axis=-1); e=np.abs(a)
+        es=sosfiltfilt(butter(2,P['h2_env_cut'],'lp',fs=SR,output='sos'),e,axis=-1)
+        y=y+np.real(a*(es/np.maximum(e,es.max()*1e-3)))
+    return y
+def h3_split(x):      # H2 flattened sustain + the ORIGINAL attack residual (first 35 ms) so the signature transient stays
+    c=h2_flatten(x); res=lpf(x-c,P['h3_resid_lp']); t=np.arange(x.shape[1])/SR
+    return c+P['h3_resid_gain']*res*np.exp(-t/(P['h3_resid_ms']/1000))
+# ---- the F1 structure on top of any cleaned source ----------------------------------
+def f1(name,X,hall=smooth_hall):
+    O=base2(X); L=O.shape[1]/SR; b=M.make(L+P['swell']+3.2); N.put(b,O,P['swell'],1.0)
+    pre=hall(np.pad(O,((0,0),(0,int(1.4*SR)))),1.2,1.2)[:,:int(P['swell']*SR)+O.shape[1]]
+    pre=lpf(N.rev(pre[:,:int(P['swell']*SR)]),3500,2); pre*=np.linspace(0,1,pre.shape[1])**2; N.put(b,pre,0,P['swell_gain'])
+    d=resample_poly(O,2,1,axis=1); fi=int(P['fade_ms']/1000*SR); d[:,:fi]*=np.linspace(0,1,fi)
+    N.put(b,d,P['swell']+P['body_offset_ms']/1000,P['low_gain'])
+    b=hall(b,P['hall_wet'],P['rt']); return M.finalize(b,name,P['tail'],lp=8500)
+if __name__=='__main__':
+    x=raw()
+    f1('G0_F1_rebuilt_reference',x,S.silk_hall)         # control: same structure, old noisy hall, uncleaned source
+    f1('G1_Additive',h1_additive(x)); f1('G2_Flatten',h2_flatten(x)); f1('G3_SplitKeepAttack',h3_split(x))
+    f1('G4_HallOnly_uncleaned',x)                        # control: only the hall swapped
+    print('ok')
