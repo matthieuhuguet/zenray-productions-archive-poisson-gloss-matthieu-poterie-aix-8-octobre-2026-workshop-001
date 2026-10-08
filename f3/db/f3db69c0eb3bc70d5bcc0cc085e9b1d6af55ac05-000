@@ -1,0 +1,35 @@
+# 8 October 2026: final montage = B then A, uniform turn, grade C, crossconnections title at the bottom, music from 3:36
+# with 0.25 s easeOutBack fade in and out, cinema boost at the cut. Usage: FinalMontage.py <seconds_per_clip>
+import numpy as np, subprocess, sys, json
+sys.path.insert(0,'Scripts'); from Montage import grade, read, enc, P, W, H, FPS
+from PIL import Image
+S=float(sys.argv[1]); D=2*S; SR=48000
+CFG=dict(title_start=0.5,title_dy=547,music_start=216,fade=0.25,boost=dict(riser=0.9,hit_hz=(80,34),hit_decay=1.4,gain=0.9,duck=0.45))
+v=np.concatenate([read(f'u/B_{S:g}s.mp4'),read(f'u/A_{S:g}s.mp4')]); n=len(v); assert n==round(D*FPS),n
+tf=[np.array(Image.open(f'title/frames/{i:04d}.png').convert('RGBA')) for i in range(96)]
+out=[]
+for i in range(n):
+    f=grade(v[i],P['grade']); k=i-int(CFG['title_start']*FPS)
+    if 0<=k<len(tf):
+        t=tf[k]; dy=CFG['title_dy']; L=np.zeros_like(t); L[dy:,:]=t[:H-dy] if dy>0 else t
+        f=np.array(Image.alpha_composite(Image.fromarray(f).convert('RGBA'),Image.fromarray(L)).convert('RGB'))
+    out.append(f)
+enc(out,f'_video_{S:g}.mp4')
+# ---- audio
+raw=subprocess.run(['ffmpeg','-v','error','-ss',str(CFG['music_start']),'-t',str(D),'-i','music/in-spite-of-everything.mp3','-af','loudnorm=I=-16:TP=-1.5','-ar',str(SR),'-ac','2','-f','f32le','-'],capture_output=True,check=True).stdout
+m=np.frombuffer(raw,np.float32).reshape(-1,2).copy(); N=len(m); t=np.arange(N)/SR
+eob=lambda u:(lambda u,c1=1.70158:1+(c1+1)*(u-1)**3+c1*(u-1)**2)(np.clip(u,0,1))
+m*=(eob(t/CFG['fade'])*eob((D-t)/CFG['fade'])*0.92)[:,None]
+T=S; b=CFG['boost']; rng=np.random.default_rng(8); env_duck=np.ones(N)
+# riser: noise swell, brighter toward the cut; hit: pitch-dropping sine + noise burst; tail: echo
+nz=rng.standard_normal(N).astype(np.float32); riser=np.zeros(N,np.float32); r0=int((T-b['riser'])*SR); r1=int(T*SR)
+if r0>=0:
+    u=np.linspace(0,1,r1-r0); sm=np.convolve(nz[r0:r1],np.ones(1+int(40*(1-u.mean())))/1,mode='same'); riser[r0:r1]=nz[r0:r1]*(u**2.2)*0.25
+h0=r1; hl=int(b['hit_decay']*SR); th=np.arange(hl)/SR; fr=b['hit_hz'][1]+(b['hit_hz'][0]-b['hit_hz'][1])*np.exp(-th*6)
+hit=np.sin(2*np.pi*np.cumsum(fr)/SR)*np.exp(-th*3.0)+0.35*nz[:hl]*np.exp(-th*18)
+boost=riser.copy(); boost[h0:h0+hl]+=hit[:max(0,min(hl,N-h0))]
+boost=np.stack([boost,boost],1)*b['gain']
+duck=np.ones(N); d0=int((T-0.05)*SR); duck[d0:d0+int(0.5*SR)]=1-b['duck']
+mix=m*duck[:,None]+boost; mix=np.tanh(mix*1.1)*0.95
+subprocess.run(['ffmpeg','-v','error','-y','-i',f'_video_{S:g}.mp4','-f','f32le','-ar',str(SR),'-ac','2','-i','-','-map','0:v','-map','1:a','-c:v','copy','-c:a','aac','-b:a','192k','-shortest',f'montage_{D:g}s_gradeC_titre_musique.mp4'],input=mix.astype(np.float32).tobytes(),check=True)
+import os; os.remove(f'_video_{S:g}.mp4'); print('done',D)

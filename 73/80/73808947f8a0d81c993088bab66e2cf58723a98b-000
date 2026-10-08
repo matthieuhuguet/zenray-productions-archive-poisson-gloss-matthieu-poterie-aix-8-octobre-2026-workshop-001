@@ -1,0 +1,25 @@
+# 9 October 2026: thumbnail from a still photo: crop black bars (measured), 1080x1920, dark vignette, 3 colour grades,
+# yellow title (kanji top, latin lines bottom). Parameters in CFG / grades.json. FR : réglages en un seul endroit.
+import numpy as np, sys, json
+sys.path.insert(0,'Scripts'); from Montage import grade, W, H
+from PIL import Image
+SRC='photo/photo_source.png'; VIG=0.70   # stronger, clearly visible dark vignette
+G={'A neutre studio':dict(g=(1.0,1.0,1.0),gam=0.90,con=1.08,sat=1.10,lift=0.0),         # 1 natural, bright
+   'B chaud doux':dict(g=(1.12,0.98,0.80),gam=0.92,con=1.12,sat=1.20,lift=0.0),          # 2 golden warm
+   'C contraste froid':dict(g=(0.80,0.98,1.20),gam=1.05,con=1.30,sat=1.25,lift=0.0)}     # 3 deep cold blue
+im=Image.open(SRC).convert('RGB'); a=np.array(im); ok=np.where(a.mean(axis=(1,2))>12)[0]; y0,y1=ok[0],ok[-1]+1
+crop=im.crop((0,y0,im.width,y1)); print('bars removed: rows',y0,'to',y1,'of',im.height, 'crop',crop.size)
+base=np.array(crop.resize((W,H),Image.LANCZOS))
+t=np.array(Image.open('title/frames/0060.png').convert('RGBA')); al=t[...,3]>200; rows=np.where(al.any(1))[0]; gaps=np.where(np.diff(rows)>12)[0]
+segs=[]; s=rows[0]
+for g in gaps: segs.append((s,rows[g])); s=rows[g+1]
+segs.append((s,rows[-1])); pad=40
+k0=(segs[0][0]-pad,segs[0][1]+pad); b0=(segs[1][0]-pad,segs[-1][1]+pad)
+L=np.zeros_like(t); top=90-segs[0][0]; L[top+k0[0]:top+k0[1]]=t[k0[0]:k0[1]]
+bh=b0[1]-b0[0]; bt=H-80-(segs[-1][1]-b0[0]); L[bt:bt+bh]=np.maximum(L[bt:bt+bh],t[b0[0]:b0[1]])
+for key,name in [('A neutre studio','1_neutre'),('B chaud doux','2_chaud'),('C contraste froid','3_froid')]:
+    p=dict(G[key]); p['vig']=VIG
+    f=grade(base,p); Image.alpha_composite(Image.fromarray(f).convert('RGBA'),Image.fromarray(L)).convert('RGB').save(f'thumb_photo_{name}.png')
+S=Image.new('RGB',(540*3,960)); 
+for k,n in enumerate(['1_neutre','2_chaud','3_froid']): S.paste(Image.open(f'thumb_photo_{n}.png').resize((540,960)),(k*540,0))
+S.save('sheets/thumb_photo_3_grades.png')

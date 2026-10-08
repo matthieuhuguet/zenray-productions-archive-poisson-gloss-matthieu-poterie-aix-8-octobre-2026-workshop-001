@@ -1,0 +1,60 @@
+# 8 October 2026: montage B then A (5 s each, uniform turn), grade C cold contrast, Vogun/Yu Mincho title with easeOutBack entry.
+# All parameters in P. FR : tous les réglages sont dans P (un seul endroit).
+import numpy as np, subprocess, json, sys
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+W,H,FPS=1080,1920,24
+P=dict(grade=dict(g=(0.90,0.99,1.10),gam=1.00,con=1.22,sat=1.12,vig=0.35,lift=0.00),
+ title=dict(lines=[('鯉陶器','jp',210),('(Koi Tōki)','vg',92),('Carpe Céramique','vg',92)],gap=34,cy=0.40,
+            color=(255,255,0),shadow=0.55,blur=9,start=0.5,fade_in_slot=1.0,hold=2.0,fade_out=1.0,from_scale=0.82,ease_dur=0.5))
+VOG='/Users/zenray/Library/Fonts/Vogun-Medium.ttf'; YU=('/Users/zenray/Library/Fonts/YuMincho.ttc',0)
+def grade(im,p):
+    x=im.astype(np.float32)/255; x=np.clip(x*np.array(p['g']),0,1)**p['gam']; x=(x-0.5)*p['con']+0.5+p['lift']
+    l=x.mean(2,keepdims=True); x=l+(x-l)*p['sat']; h,w=x.shape[:2]; yy,xx=np.mgrid[0:h,0:w]; r=np.hypot((xx-w/2)/(w/2),(yy-h/2)/(h/2))
+    return (np.clip(x*(1-p['vig']*np.clip(r-0.4,0,1)**2)[...,None],0,1)*255).astype(np.uint8)
+def easeOutBack(t,c1=1.70158):
+    t=min(max(t,0),1); c3=c1+1; return 1+c3*(t-1)**3+c1*(t-1)**2
+def title_layer(T):
+    L=Image.new('RGBA',(W,H),(0,0,0,0)); d=ImageDraw.Draw(L); sizes=[]
+    fonts=[ImageFont.truetype(YU[0],size=s,index=YU[1]) if k=='jp' else ImageFont.truetype(VOG,size=s) for _,k,s in T['lines']]
+    boxes=[d.textbbox((0,0),t,font=f) for (t,_,_),f in zip(T['lines'],fonts)]
+    tot=sum(b[3]-b[1] for b in boxes)+T['gap']*(len(boxes)-1); y=int(H*T['cy']-tot/2)
+    for (t,_,_),f,b in zip(T['lines'],fonts,boxes):
+        x=(W-(b[2]-b[0]))//2-b[0]; d.text((x,y-b[1]),t,font=f,fill=T['color']+(255,)); y+=b[3]-b[1]+T['gap']
+    a=np.array(L)[...,3]; sh=Image.fromarray((a*T['shadow']).astype(np.uint8)).filter(ImageFilter.GaussianBlur(T['blur']))
+    S=Image.new('RGBA',(W,H),(0,0,0,0)); S.putalpha(sh); S.alpha_composite(L); return S
+def tparams(t,T,ed):
+    s=t-T['start']
+    if s<0: return 0,1
+    if s<T['fade_in_slot']:
+        e=easeOutBack(s/ed); return min(1,max(0,s/ed)),T['from_scale']+(1-T['from_scale'])*e
+    s-=T['fade_in_slot']+T['hold']
+    return (1,1) if s<0 else (max(0,1-s/T['fade_out']),1)
+def apply_title(frame,layer,t,T,ed):
+    al,sc=tparams(t,T,ed)
+    if al<=0: return frame
+    Lyr=layer if abs(sc-1)<1e-4 else layer.resize((int(W*sc),int(H*sc)),Image.LANCZOS)
+    c=Image.new('RGBA',(W,H),(0,0,0,0)); c.alpha_composite(Lyr,(int((W-Lyr.width)/2),int((H-Lyr.height)/2)) if sc>=1 else (int((W-Lyr.width)/2),int((H-Lyr.height)/2)))
+    aa=np.array(c); aa[...,3]=(aa[...,3]*al).astype(np.uint8)
+    out=Image.alpha_composite(Image.fromarray(frame).convert('RGBA'),Image.fromarray(aa)); return np.array(out.convert('RGB'))
+def read(p): 
+    raw=subprocess.run(['ffmpeg','-v','error','-i',p,'-f','rawvideo','-pix_fmt','rgb24','-'],capture_output=True,check=True).stdout
+    return np.frombuffer(raw,np.uint8).reshape(-1,H,W,3)
+def enc(frames,out,pix='yuv420p',codec=('libx265','-crf','14','-preset','slow','-tag:v','hvc1'),rgba=False):
+    p=subprocess.Popen(['ffmpeg','-v','error','-y','-f','rawvideo','-pix_fmt','rgba' if rgba else 'rgb24','-s',f'{W}x{H}','-r',str(FPS),'-i','-','-c:v',*codec,'-pix_fmt',pix,out],stdin=subprocess.PIPE)
+    for f in frames: p.stdin.write(f.tobytes())
+    p.stdin.close(); p.wait()
+if __name__=='__main__':
+    mode=sys.argv[1]; T=P['title']
+    if mode=='base':   # 10 s graded, no title
+        v=np.concatenate([read('b/B_uniform5s.mp4'),read('A_uniform5s.mp4')]); g=[grade(f,P['grade']) for f in v]
+        enc(g,'montage_10s_gradeC_notitle.mp4')
+    if mode=='intro':  # 3 easeOutBack configs on first 5 s
+        v=read('b/B_uniform5s.mp4'); g=[grade(f,P['grade']) for f in v]; lay=title_layer(T)
+        for ed in (0.25,0.5,1.0):
+            enc([apply_title(f,lay,i/FPS,T,ed) for i,f in enumerate(g)],f'intro_easeOutBack_{ed}s.mp4')
+    if mode=='titlemov':  # transparent title only, ed from argv
+        ed=float(sys.argv[2]); lay=title_layer(T); fr=[]
+        for i in range(int(5*FPS)):
+            al,sc=tparams(i/FPS,T,ed); L=lay if abs(sc-1)<1e-4 else lay.resize((int(W*sc),int(H*sc)),Image.LANCZOS)
+            c=Image.new('RGBA',(W,H),(0,0,0,0)); c.alpha_composite(L,((W-L.width)//2,(H-L.height)//2)); a=np.array(c); a[...,3]=(a[...,3]*al).astype(np.uint8); fr.append(a)
+        enc(fr,f'title_alpha_easeOutBack_{ed}s.mov',pix='yuva444p10le',codec=('prores_ks','-profile:v','4444'),rgba=True)
